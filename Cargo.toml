@@ -1,0 +1,19 @@
+[package]
+name = "packwiz-gui"
+version = "0.1.0"
+edition = "2021"
+
+resolver = "2"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+eframe = "0.23.0"
+egui = "0.23.0"
+egui_dock = "0.8.1"
+log = "0.4.20"
+env_logger = "0.10.0"
+native-dialog = "0.7.0"
+
+[profile.dev]
+incremental = false
