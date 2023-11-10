@@ -14,7 +14,9 @@ pub struct App {
 
 impl Default for App {
     fn default() -> Self {
-        let tab = Tab::new(ExplorerTab::new(None));
+        let tab = Tab::new(ExplorerTab::new(Some(
+            "D:\\Games\\Minecraft\\ModPacks\\HMMinecraft\\S1".into(),
+        )));
         let tree = DockState::new(vec![tab]);
 
         // let [a, b] = tree.main_surface_mut().split_left(
@@ -51,7 +53,7 @@ impl eframe::App for App {
                 ui.menu_button("File", |ui| {
                     if ui.add(Button::new("Open")).clicked() {
                         let path = FileDialog::new()
-                            .set_location("C:\\")
+                            .set_location("D:\\Games\\Minecraft\\ModPacks\\HMMinecraft\\S1")
                             .show_open_single_dir();
 
                         match path {

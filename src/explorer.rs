@@ -1,6 +1,16 @@
-use std::{error::Error, fmt::Display, fs::read_dir, path::PathBuf, vec};
+use std::{
+    error::Error,
+    fmt::Display,
+    fs::read_dir,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    vec,
+};
 
-use egui::{pos2, vec2, Id, Sense, TextStyle, Widget, WidgetInfo, WidgetText, WidgetType};
+use egui::{
+    pos2, vec2, Id, Rounding, Sense, TextStyle, Widget, WidgetInfo, WidgetText, WidgetType,
+};
+use log::{error, info};
 
 use crate::tab::PackwizTab;
 
@@ -10,21 +20,33 @@ pub struct ExplorerTab {
 
 impl ExplorerTab {
     pub fn new(path: Option<PathBuf>) -> Self {
-        let path = match path {
-            Some(some_path) => Some(some_path.into()),
-            None => None,
-        };
         Self {
             explorer: Explorer::new(path),
         }
     }
 
-    fn create_item_ui(file_path: PathBuf, ui: &mut egui::Ui, _selected_files: &Vec<PathBuf>) {
-        let Ok(explorer_item) = ExplorerItem::new(file_path) else {
+    fn create_item_ui(
+        file_path: PathBuf,
+        ui: &mut egui::Ui,
+        selected_files: Arc<Mutex<Vec<PathBuf>>>,
+    ) {
+        let mut selected_files = match selected_files.lock() {
+            Ok(selected_files) => selected_files,
+            Err(err) => {
+                error!("Failed to get selected files: {err}");
+                return;
+            }
+        };
+
+        let selected = selected_files.contains(&file_path);
+
+        let Ok(explorer_item) = ExplorerItem::new(file_path.clone(), selected) else {
             return;
         };
 
-        ui.add(explorer_item);
+        if ui.add(explorer_item).clicked() && !selected {
+            selected_files.push(file_path);
+        }
 
         // let Some(file_name) = file_path.file_name() else {
         //     return;
@@ -77,19 +99,23 @@ impl PackwizTab for ExplorerTab {
 
         let files = self.explorer.files();
 
-        if files.len() > 0 {
-            let selected_files: Option<Vec<PathBuf>> = ui
+        if !files.is_empty() {
+            let selected_files_id = Id::new("selected_files");
+            let selected_files: Option<Arc<Mutex<Vec<PathBuf>>>> = ui
                 .ctx()
-                .memory(|memory| memory.data.get_temp(Id::new("selected_files")));
-            let selected_files = if selected_files.is_some() {
-                selected_files.unwrap()
+                .memory(|memory| memory.data.get_temp(selected_files_id));
+            let selected_files = if let Some(selected_files) = selected_files {
+                selected_files
             } else {
-                Vec::new() as Vec<PathBuf>
+                Arc::new(Mutex::new(Vec::new()))
             };
 
             for file in files {
-                ExplorerTab::create_item_ui(file, ui, &selected_files);
+                ExplorerTab::create_item_ui(file, ui, selected_files.clone());
             }
+
+            ui.ctx()
+                .memory_mut(|memory| memory.data.insert_temp(selected_files_id, selected_files));
 
             return;
         }
@@ -116,17 +142,17 @@ impl Explorer {
             let paths = read_dir(path);
             if let Ok(paths) = paths {
                 let mut files: Vec<PathBuf> = vec![];
-                for path in paths {
+                paths.for_each(|path| {
                     if let Ok(entry) = path {
                         files.push(entry.path());
                     }
-                }
+                });
 
                 return files;
             }
         }
 
-        return vec![];
+        vec![]
     }
 }
 
@@ -154,13 +180,14 @@ enum InternalExplorerItemType {
 }
 
 pub struct ExplorerItem {
+    selected: bool,
     item_name: Box<str>,
     item_path: PathBuf,
     item_type: InternalExplorerItemType,
 }
 
 impl ExplorerItem {
-    pub fn new(item_path: PathBuf) -> Result<Self, ExplorerItemError> {
+    pub fn new(item_path: PathBuf, selected: bool) -> Result<Self, ExplorerItemError> {
         let Some(item_name) = item_path.file_name() else {
             return Err(ExplorerItemError::WrongFileName);
         };
@@ -176,6 +203,7 @@ impl ExplorerItem {
         }
 
         Ok(Self {
+            selected,
             item_name: Box::from(item_name.to_string_lossy()),
             item_path,
             item_type,
@@ -189,18 +217,47 @@ impl ExplorerItem {
 // image
 impl Widget for ExplorerItem {
     fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+        // TODO: customizable?
+        let padding = 2.0;
+        // TODO: customizable?
+        let mut margin = 2.0;
+        let window_stroke_width = 2.0 * ui.visuals().window_stroke().width;
+
         let text: WidgetText = self.item_name.into_string().into();
         let text = text.into_galley(ui, Some(false), ui.available_width(), TextStyle::Button);
-        let desired_size = vec2(ui.available_width(), text.size().y);
-        let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click_and_drag());
-        response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, text.text()));
+        let mut desired_size = vec2(ui.available_width(), text.size().y);
+        margin += window_stroke_width;
+        margin += padding;
+        desired_size += vec2(0.0, margin);
+        let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
+        response.widget_info(|| {
+            WidgetInfo::selected(WidgetType::SelectableLabel, self.selected, text.text())
+        });
 
         if ui.is_rect_visible(rect) {
-            let visuals = ui.style().interact(&response);
+            let visuals = ui.style().interact_selectable(&response, self.selected);
 
-            let cursor_x = rect.min.x + 2.0;
+            if response.hovered() {
+                ui.painter().rect(
+                    rect,
+                    Rounding::same(2.0),
+                    visuals.bg_fill,
+                    visuals.bg_stroke,
+                );
+            }
+
+            if self.selected {
+                ui.painter().rect(
+                    rect,
+                    Rounding::same(2.0),
+                    visuals.bg_fill,
+                    visuals.bg_stroke,
+                );
+            }
+
+            let cursor_x = rect.min.x + padding;
             let text_pos = pos2(cursor_x, rect.center().y - 0.5 * text.size().y);
-            text.paint_with_visuals(ui.painter(), text_pos, visuals);
+            text.paint_with_visuals(ui.painter(), text_pos, &visuals);
         }
 
         response
